@@ -19,12 +19,36 @@ const scheduledJobs = new Map();
 let chatId = defaultChatId ? String(defaultChatId) : null;
 
 const fixedRemindersTemplate = [
-  { time: "07:30", text: "Bom dia. Levanta e começa. Nada de entrar no automático.", fixedKey: "morning" },
-  { time: "09:00", text: "Define agora a prioridade principal do dia e executa sem enrolar.", fixedKey: "priority" },
-  { time: "13:00", text: "Pausa consciente: água, comida certa e volta pro eixo.", fixedKey: "nutrition" },
-  { time: "18:00", text: "Hora do treino. Sem negociar com a preguiça.", fixedKey: "training" },
-  { time: "21:00", text: "Checa o dia: alimentação, estudo e evolução. O que falta, faz agora.", fixedKey: "review" },
-  { time: "22:30", text: "Fecha o dia com postura. Não stalkeia, não manda mensagem, respeita o processo.", fixedKey: "mental" }
+  {
+    time: "07:30",
+    text: "Bom dia. Levanta e começa. Nada de entrar no automático.",
+    fixedKey: "morning",
+  },
+  {
+    time: "09:00",
+    text: "Define agora a prioridade principal do dia e executa sem enrolar.",
+    fixedKey: "priority",
+  },
+  {
+    time: "13:00",
+    text: "Pausa consciente: água, comida certa e volta pro eixo.",
+    fixedKey: "nutrition",
+  },
+  {
+    time: "18:00",
+    text: "Hora do treino. Sem negociar com a preguiça.",
+    fixedKey: "training",
+  },
+  {
+    time: "21:00",
+    text: "Checa o dia: alimentação, estudo e evolução. O que falta, faz agora.",
+    fixedKey: "review",
+  },
+  {
+    time: "22:30",
+    text: "Fecha o dia com postura. Não stalkeia, não manda mensagem, respeita o processo.",
+    fixedKey: "mental",
+  },
 ];
 
 function loadReminders() {
@@ -66,13 +90,22 @@ function send(toChatId, msg) {
     .catch((err) => console.error("Erro ao enviar mensagem:", err.message));
 }
 
+function unscheduleReminder(reminderId) {
+  if (scheduledJobs.has(reminderId)) {
+    scheduledJobs.get(reminderId).stop();
+    scheduledJobs.delete(reminderId);
+  }
+}
+
 function scheduleReminder(reminder) {
   const parsed = parseTime(reminder.time);
   if (!parsed) return;
 
-  if (scheduledJobs.has(reminder.id)) {
-    scheduledJobs.get(reminder.id).stop();
-    scheduledJobs.delete(reminder.id);
+  unscheduleReminder(reminder.id);
+
+  if (reminder.paused) {
+    console.log(`Lembrete #${reminder.id} pausado, não será agendado.`);
+    return;
   }
 
   const expression = `${parsed.minute} ${parsed.hour} * * *`;
@@ -80,20 +113,16 @@ function scheduleReminder(reminder) {
   const job = cron.schedule(
     expression,
     () => {
-      send(reminder.chatId, `⏰ ${reminder.fixed ? "[Rotina]" : "[Lembrete]"} #${reminder.id}: ${reminder.text}`);
+      send(
+        reminder.chatId,
+        `⏰ ${reminder.fixed ? "[Rotina]" : "[Lembrete]"} #${reminder.id}: ${reminder.text}`
+      );
     },
     { timezone }
   );
 
   scheduledJobs.set(reminder.id, job);
   console.log(`Lembrete agendado: #${reminder.id} às ${reminder.time}`);
-}
-
-function unscheduleReminder(reminderId) {
-  if (scheduledJobs.has(reminderId)) {
-    scheduledJobs.get(reminderId).stop();
-    scheduledJobs.delete(reminderId);
-  }
 }
 
 function scheduleAllReminders() {
@@ -123,7 +152,8 @@ function ensureFixedReminders(currentChatId) {
         text: template.text,
         fixed: true,
         fixedKey: template.fixedKey,
-        createdAt: new Date().toISOString()
+        paused: false,
+        createdAt: new Date().toISOString(),
       };
 
       reminders.push(newReminder);
@@ -136,6 +166,18 @@ function ensureFixedReminders(currentChatId) {
     saveReminders(reminders);
     console.log("Lembretes fixos garantidos com sucesso.");
   }
+}
+
+function findReminderById(reminders, reminderId, currentChatId) {
+  return reminders.find(
+    (r) => r.id === reminderId && String(r.chatId) === String(currentChatId)
+  );
+}
+
+function formatReminder(reminder) {
+  const type = reminder.fixed ? "ROTINA" : "LIVRE";
+  const status = reminder.paused ? "PAUSADO" : "ATIVO";
+  return `#${reminder.id} - ${reminder.time} - [${type}] [${status}] ${reminder.text}`;
 }
 
 bot.on("polling_error", (err) => {
@@ -162,7 +204,10 @@ Comandos:
 /teste - testar resposta
 /add HH:MM texto - criar lembrete
 /list - listar lembretes
-/remove ID - remover lembrete
+/remove ID - remover lembrete livre
+/edit ID HH:MM novo texto - editar lembrete
+/pause ID - pausar lembrete
+/resume ID - reativar lembrete
 
 Os lembretes fixos da rotina já são criados automaticamente.`
   );
@@ -179,10 +224,16 @@ bot.onText(/\/help/, (msg) => {
 /teste - testar resposta
 /add HH:MM texto - adicionar lembrete
 /list - listar lembretes
-/remove ID - remover lembrete
+/remove ID - remover lembrete livre
+/edit ID HH:MM novo texto - editar horário e texto
+/pause ID - pausar lembrete
+/resume ID - reativar lembrete
 
-Exemplo:
-/add 21:00 estudar node`
+Exemplos:
+/add 21:00 estudar node
+/edit 3 22:00 revisar dieta
+/pause 2
+/resume 2`
   );
 });
 
@@ -212,7 +263,8 @@ bot.onText(/^\/add\s+(\d{2}:\d{2})\s+(.+)$/i, (msg, match) => {
     time,
     text,
     fixed: false,
-    createdAt: new Date().toISOString()
+    paused: false,
+    createdAt: new Date().toISOString(),
   };
 
   reminders.push(newReminder);
@@ -222,9 +274,7 @@ bot.onText(/^\/add\s+(\d{2}:\d{2})\s+(.+)$/i, (msg, match) => {
   send(
     currentChatId,
     `Lembrete criado ✅
-ID: ${newReminder.id}
-Horário: ${newReminder.time}
-Texto: ${newReminder.text}`
+${formatReminder(newReminder)}`
   );
 });
 
@@ -239,11 +289,7 @@ bot.onText(/^\/list$/i, (msg) => {
     return;
   }
 
-  const lines = reminders.map((r) => {
-    const tag = r.fixed ? "ROTINA" : "LIVRE";
-    return `#${r.id} - ${r.time} - [${tag}] ${r.text}`;
-  });
-
+  const lines = reminders.map(formatReminder);
   send(currentChatId, `Seus lembretes:\n\n${lines.join("\n")}`);
 });
 
@@ -252,9 +298,7 @@ bot.onText(/^\/remove\s+(\d+)$/i, (msg, match) => {
   const reminderId = Number(match[1]);
 
   const reminders = loadReminders();
-  const reminder = reminders.find(
-    (r) => r.id === reminderId && String(r.chatId) === currentChatId
-  );
+  const reminder = findReminderById(reminders, reminderId, currentChatId);
 
   if (!reminder) {
     send(currentChatId, `Não encontrei um lembrete com ID ${reminderId}.`);
@@ -262,7 +306,7 @@ bot.onText(/^\/remove\s+(\d+)$/i, (msg, match) => {
   }
 
   if (reminder.fixed) {
-    send(currentChatId, "Esse lembrete faz parte da rotina fixa e não pode ser removido.");
+    send(currentChatId, "Esse lembrete faz parte da rotina fixa e não pode ser removido. Use /pause se quiser desativar.");
     return;
   }
 
@@ -274,6 +318,100 @@ bot.onText(/^\/remove\s+(\d+)$/i, (msg, match) => {
   unscheduleReminder(reminderId);
 
   send(currentChatId, `Lembrete #${reminderId} removido ✅`);
+});
+
+bot.onText(/^\/edit\s+(\d+)\s+(\d{2}:\d{2})\s+(.+)$/i, (msg, match) => {
+  const currentChatId = String(msg.chat.id);
+  const reminderId = Number(match[1]);
+  const newTime = match[2];
+  const newText = match[3].trim();
+
+  const parsed = parseTime(newTime);
+  if (!parsed) {
+    send(currentChatId, "Horário inválido. Use HH:MM. Exemplo: /edit 3 22:00 revisar dieta");
+    return;
+  }
+
+  const reminders = loadReminders();
+  const reminder = findReminderById(reminders, reminderId, currentChatId);
+
+  if (!reminder) {
+    send(currentChatId, `Não encontrei um lembrete com ID ${reminderId}.`);
+    return;
+  }
+
+  reminder.time = newTime;
+  reminder.text = newText;
+  reminder.updatedAt = new Date().toISOString();
+
+  saveReminders(reminders);
+  scheduleReminder(reminder);
+
+  send(
+    currentChatId,
+    `Lembrete editado ✅
+${formatReminder(reminder)}`
+  );
+});
+
+bot.onText(/^\/pause\s+(\d+)$/i, (msg, match) => {
+  const currentChatId = String(msg.chat.id);
+  const reminderId = Number(match[1]);
+
+  const reminders = loadReminders();
+  const reminder = findReminderById(reminders, reminderId, currentChatId);
+
+  if (!reminder) {
+    send(currentChatId, `Não encontrei um lembrete com ID ${reminderId}.`);
+    return;
+  }
+
+  if (reminder.paused) {
+    send(currentChatId, `O lembrete #${reminderId} já está pausado.`);
+    return;
+  }
+
+  reminder.paused = true;
+  reminder.updatedAt = new Date().toISOString();
+
+  saveReminders(reminders);
+  unscheduleReminder(reminderId);
+
+  send(
+    currentChatId,
+    `Lembrete pausado ⏸️
+${formatReminder(reminder)}`
+  );
+});
+
+bot.onText(/^\/resume\s+(\d+)$/i, (msg, match) => {
+  const currentChatId = String(msg.chat.id);
+  const reminderId = Number(match[1]);
+
+  const reminders = loadReminders();
+  const reminder = findReminderById(reminders, reminderId, currentChatId);
+
+  if (!reminder) {
+    send(currentChatId, `Não encontrei um lembrete com ID ${reminderId}.`);
+    return;
+  }
+
+  if (!reminder.paused) {
+    send(currentChatId, `O lembrete #${reminderId} já está ativo.`);
+    return;
+  }
+
+  reminder.paused = false;
+  reminder.updatedAt = new Date().toISOString();
+
+  saveReminders(reminders);
+  scheduleReminder(reminder);
+
+  send(
+    currentChatId,
+    `Lembrete reativado ▶️
+${formatReminder(reminder)}`
+  );
 });
 
 // Inicialização
